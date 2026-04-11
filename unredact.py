@@ -16,28 +16,55 @@ def extract_text_ignore_overlays(pdf_path):
     doc.close()
     return pages
 
+def extract_images(pdf_path, out_dir):
+    """Extract all embedded images from the PDF, saved as PNGs."""
+    doc = fitz.open(pdf_path)
+    image_count = 0
+
+    for page_num, page in enumerate(doc, start=1):
+        for img_index, img in enumerate(page.get_images(full=True), start=1):
+            xref = img[0]
+            try:
+                base_image = doc.extract_image(xref)
+                img_bytes = base_image["image"]
+                img_ext = base_image["ext"]  # e.g. "png", "jpeg"
+
+                img_filename = out_dir / f"page{page_num}_img{img_index}.{img_ext}"
+                with open(img_filename, "wb") as f:
+                    f.write(img_bytes)
+
+                image_count += 1
+            except Exception:
+                pass  # Skip unreadable image xrefs
+
+    doc.close()
+    return image_count
+
 def process_pdf(pdf_path, input_root, output_root):
     try:
         pages = extract_text_ignore_overlays(pdf_path)
 
-        if not any(pages):
-            return (pdf_path, False, "No extractable text")
-
         relative_path = pdf_path.relative_to(input_root)
-        out_dir = output_root / relative_path.parent
+        out_dir = output_root / relative_path.parent / pdf_path.stem
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        out_file = out_dir / f"{pdf_path.stem}_RECOVERED.txt"
+        has_text = any(pages)
+        if has_text:
+            out_file = out_dir / f"{pdf_path.stem}_RECOVERED.txt"
+            with open(out_file, "w", encoding="utf-8") as f:
+                for i, text in enumerate(pages, start=1):
+                    f.write(f"\n--- PAGE {i} ---\n")
+                    f.write(text + "\n")
 
-        with open(out_file, "w", encoding="utf-8") as f:
-            for i, text in enumerate(pages, start=1):
-                f.write(f"\n--- PAGE {i} ---\n")
-                f.write(text + "\n")
+        image_count = extract_images(pdf_path, out_dir)
 
-        return (pdf_path, True, None)
+        if not has_text and image_count == 0:
+            return (pdf_path, False, "No extractable text or images")
+
+        return (pdf_path, True, None, image_count)
 
     except Exception as e:
-        return (pdf_path, False, str(e))
+        return (pdf_path, False, str(e), 0)
 
 def find_pdfs(path):
     if path.is_file() and path.suffix.lower() == ".pdf":
@@ -46,7 +73,7 @@ def find_pdfs(path):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Recover text from improperly redacted PDFs"
+        description="Recover text and images from improperly redacted PDFs"
     )
     parser.add_argument("path", help="PDF file or directory")
     parser.add_argument(
@@ -88,18 +115,19 @@ def main():
         for future in tqdm(as_completed(futures), total=len(futures), desc="Processing"):
             results.append(future.result())
 
-    # Summary
-    success = sum(1 for _, ok, _ in results if ok)
+    success = sum(1 for r in results if r[1])
     failed = len(results) - success
+    total_images = sum(r[3] for r in results if r[1])
 
     print("\n=== SUMMARY ===")
     print(f"Processed: {len(results)}")
     print(f"Recovered: {success}")
-    print(f"Failed: {failed}")
+    print(f"Failed:    {failed}")
+    print(f"Images extracted: {total_images}")
 
-    for pdf, ok, err in results:
-        if not ok:
-            print(f"[FAIL] {pdf}: {err}")
+    for r in results:
+        if not r[1]:
+            print(f"[FAIL] {r[0]}: {r[2]}")
 
 if __name__ == "__main__":
     main()
