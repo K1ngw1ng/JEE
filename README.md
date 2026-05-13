@@ -1,5 +1,5 @@
 # JEE
-A Python Utility for underacting improperly redacted or non-flattened PDFs to txt
+A Python Utility for unredacting improperly redacted or non-flattened PDFs to txt
 
 # Instructions
 
